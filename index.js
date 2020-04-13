@@ -26,7 +26,7 @@ class PassBuddyRedisError extends Error {
 
 // lazy init Redis client
 const _redisClient = (host, port) => {
-  let client = null
+  let client
 
   const initRedisClient = (host, port) => {
     const retry_strategy = (options) => {
@@ -67,40 +67,46 @@ const _redisClient = (host, port) => {
 }
 
 const _genLuaScript = (prefix, name, uuid, capacity, TTL) => {
-  // set future TS to one hour from now in case the
-  // express server's time is behind Redis'
-  const futureTS = Math.floor((Date.now() / 1000) + 0.5) + 3600
-  // script returns 1 if acquired, 0 otherwise
-  return `
-    -- get server timestamp
-    redis.call('SET', '${prefix}-redis-timestamp', '1')
-    redis.call('EXPIREAT', '${prefix}-redis-timestamp', ${futureTS})
-    local TTL = redis.call('TTL', '${prefix}-redis-timestamp')
-    local currentTS = ${futureTS} - TTL
+  // aws uses NTP to synchronize clocks across lambda instances to within seconds
+  // redis server time only allows precision to the second
+  // therefore we can safely rely on Date.now() to estimate current time
+  // across all lambda instances
+  // https://docs.aws.amazon.com/lambda/latest/dg/configuration-envvars.html
 
+  const key = `${prefix}-${name}`
+  const now = Date.now()
+  const expired = now - TTL
+  const expiry = now + TTL
+
+  // script returns an array
+  // first array element is 1 if lock acquired, 0 otherwise
+  // second element is the lock expiry in milliseconds
+  return `
     -- remove expired accesses
-    redis.call('ZREMRANGEBYSCORE', '${prefix}-${name}', '-inf', currentTS - ${TTL})
+    redis.call('ZREMRANGEBYSCORE', '${key}', '-inf', ${expired})
     
     -- add/update uuid
-    redis.call('ZADD', '${prefix}-${name}', currentTS + ${TTL}, '${uuid}')
+    local expiry = ${expiry}
+    redis.call('ZADD', '${key}', expiry, '${uuid}')
     
     -- get number of valid accesses
-    local count = redis.call('ZCARD', '${prefix}-${name}')
+    local count = redis.call('ZCARD', '${key}')
     
     -- remove newly added uuid if count exceeds max
     local acquired = 1
     if count > ${capacity} then
-      redis.call('ZREM', '${prefix}-${name}', '${uuid}')
+      redis.call('ZREM', '${key}', '${uuid}')
       acquired = 0
+      expiry = 0
       count = count - 1
     end
 
-    return acquired
+    return {acquired, expiry}
   `
 }
 
 // instructs redis to execute the acquisition script server-side
-// return 1 if successful, throws and error otherwise
+// return [1, expiry (in ms)] if successful, throws and error otherwise
 // eslint-disable-next-line arrow-body-style
 const _acquire = (client, prefix, name, uuid, capacity, TTL) => new Promise((resolve, reject) => {
   client.send_command(
@@ -114,7 +120,7 @@ const _acquire = (client, prefix, name, uuid, capacity, TTL) => new Promise((res
         return
       }
 
-      if (!res) {
+      if (!res[0]) {
         reject(new PassBuddyCapacityError(name))
         return
       }
@@ -143,20 +149,19 @@ class PassBuddy {
    * Create a PassBuddy (semaphore)
    * @param {{prefix: string, name: string, capacity: number, TTL: number,
    * maxAttempts: number, retryInterval: number, host: string,
-   * port: number}} options - TTL is in seconds while retryInterval is in milliseconds
+   * port: number}} options - TTL and retryInterval are expressed in milliseconds
    * @return {PassBuddy}
    */
   constructor(options) {
     this._prefix = options.prefix || 'passbuddy'
     this._name = options.name || 'semaphore'
     this._capacity = options.capacity || 10
-    this._TTL = options.TTL || 5 // in seconds
+    this._TTL = options.TTL || 5000 // in milliseconds
     this._maxAttempts = options.maxAttempts || 5
     this._retryInterval = options.retryInterval || 500 // in milliseconds
     this._client = _redisClient(options.host || '127.0.0.1', options.port || 6379)
     this._uuid = uuidv4()
-    this._isHeld = false
-    this._timeout = 0
+    this._isHeldUntil = 0 // in milliseconds
   }
 
   /**
@@ -168,20 +173,25 @@ class PassBuddy {
   }
 
   /**
+   * Getter for the lock status
+   * @return {boolean}
+   */
+  get isHeld() {
+    return this._isHeldUntil > Date.now()
+  }
+
+  /**
    * Makes a call to the Redis remote server to acquire or extend the semaphore's validity
    * @param {number} [attempts=0] - Number of failed attempts before current call
    * @return {Promise<true>}
    */
   async acquire(attempts = 0) {
     try {
-      await _acquire(
+      const [_, isHeldUntil] = await _acquire(
         this.client, this._prefix, this._name,
         this._uuid, this._capacity, this._TTL,
       )
-
-      this._isHeld = true
-      clearTimeout(this._timeout)
-      this._timeout = setTimeout(() => { this._isHeld = false }, this._TTL * 1000)
+      this._isHeldUntil = isHeldUntil
 
       return true
     } catch (err) {
@@ -202,9 +212,7 @@ class PassBuddy {
    */
   async release() {
     await _release(this.client, this._prefix, this._name, this._uuid)
-
-    this._isHeld = false
-    clearTimeout(this._timeout)
+    this._isHeldUntil = 0
 
     return true
   }
@@ -214,7 +222,7 @@ class PassBuddy {
    * @return {Promise<true>}
    */
   async use() {
-    return this._isHeld ? true : this.acquire()
+    return this.isHeld ? true : this.acquire()
   }
 
   /**
@@ -226,17 +234,11 @@ class PassBuddy {
     return async (...args) => {
       try {
         await this.use()
-        let output = callback(...args)
-
-        // let's await to make sure the callack is done with the resource
-        // before releasing it in finally
-        if (releaseOnComplete) {
-          output = output instanceof Promise ? await output : output
-        }
-
-        return output
+        return callback(...args)
       } finally {
-        this.release()
+        if (releaseOnComplete) {
+          this.release()
+        }
       }
     }
   }
@@ -250,15 +252,19 @@ class PassBuddy {
    */
   handler({ acquireOnStart = false, releaseOnEnd = true } = {}) {
     return async (req, res, next) => {
-      if (acquireOnStart) {
-        await this.acquire()
-      }
+      try {
+        if (releaseOnEnd) {
+          onFinished(res, () => this.release())
+        }
 
-      if (releaseOnEnd) {
-        onFinished(res, () => this.release())
-      }
+        if (acquireOnStart) {
+          await this.acquire()
+        }
 
-      next()
+        next()
+      } catch (err) {
+        next(err)
+      }
     }
   }
 }
