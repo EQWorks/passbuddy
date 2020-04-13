@@ -1,5 +1,5 @@
 # PassBuddy Semaphore
-PassBuddy is a Redis semaphore implementation.
+PassBuddy is a Redis _semaphore_ implementation.
 - Semaphores allow controlled access to resources shared across multiple self-contained consumers (e.g. lamba or server instances).
 - Each consumer can temporarily claim access to a resource by acquiring a lock.
 - The semaphore oversees the lock acquisition process and denies access when no more locks are available for grabs.
@@ -28,12 +28,14 @@ const options = {
   TTL: number,             // time (in milliseconds) before the lock is automatically released - default: 5000
   maxAttempts: number,     // max number of lock acquisition attempts before timing out when the semaphore is at capacity - default: 5
   retryInterval: number,   // time (in milliseconds) between each acquisition attempt - default: 500
-  host: string,            // Redis host - default: '127.0.0.1'
-  port: number,            // Redis port - default: 6379
+  redisOptions: string,    // Full list of options, including defaults, available on Node Redis' NPM page (link below))
+  redisClient: RedisClient // Node Redis' client; takes precedence over redisOptions if supplied
 }
 ```
 
-All local PassBuddy instances of the same semaphore should use the same set of options.
+Node Redis' client options: [NPM](https://www.npmjs.com/package/redis#options-object-properties)
+
+__All local PassBuddy instances of the same semaphore should use the same set of options.__
 
 ## Example - Express Application
 ```
@@ -43,8 +45,7 @@ const PassBuddy = require('@eqworks/passbuddy')
 const passOptions = {
   prefix: `passbuddy-${STAGE}`,
   name: 'testlock',
-  host: REDIS_HOST,
-  port: REDIS_PORT,
+  redisOptions: { host: REDIS_HOST, port: REDIS_PORT },
 }
 
 const pass = new PassBuddy(passOptions)
@@ -68,6 +69,9 @@ const { rows } = await pool.query('SELECT...', ...params)
 
 ## Install
 ```yarn add @eqworks/passbuddy```
-or ```npm install @eqworks/passbuddy```
+
+or
+
+```npm install @eqworks/passbuddy```
 
 

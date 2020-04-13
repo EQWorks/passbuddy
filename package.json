@@ -1,13 +1,18 @@
 {
   "name": "@eqworks/passbuddy",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Redis implementation of a semaphore",
   "repository": "github:EQWorks/passbuddy",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "lint": "eslint ."
   },
-  "author": "",
-  "license": "ISC",
+  "files": [
+    "index.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "main": "index.js",
+  "license": "MIT",
   "dependencies": {
     "on-finished": "^2.3.0",
     "redis": "^3.0.2",

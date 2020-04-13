@@ -25,10 +25,10 @@ class PassBuddyRedisError extends Error {
 }
 
 // lazy init Redis client
-const _redisClient = (host, port) => {
+const _redisClient = (options) => {
   let client
 
-  const initRedisClient = (host, port) => {
+  const initRedisClient = (options) => {
     const retry_strategy = (options) => {
       if (options.error && options.error.code === 'ECONNREFUSED') {
         // End reconnecting on a specific error and flush all commands with
@@ -48,7 +48,7 @@ const _redisClient = (host, port) => {
       return Math.min(options.attempt * 100, 3000)
     }
 
-    const client = redis.createClient(port, host, { retry_strategy })
+    const client = redis.createClient({ retry_strategy, ...options })
 
     client.on('error', (err) => {
       throw new PassBuddyRedisError(`Error with Redis client: ${err.message}`)
@@ -60,7 +60,7 @@ const _redisClient = (host, port) => {
   // init and/or returns client
   return () => {
     if (!client) {
-      client = initRedisClient(host, port)
+      client = initRedisClient(options)
     }
     return client
   }
@@ -148,8 +148,8 @@ class PassBuddy {
   /**
    * Create a PassBuddy (semaphore)
    * @param {{prefix: string, name: string, capacity: number, TTL: number,
-   * maxAttempts: number, retryInterval: number, host: string,
-   * port: number}} options - TTL and retryInterval are expressed in milliseconds
+   * maxAttempts: number, retryInterval: number, redisOptions: redis.ClientOpts,
+   * redisClient: redis.RedisClient}} options - TTL and retryInterval are expressed in milliseconds
    * @return {PassBuddy}
    */
   constructor(options) {
@@ -159,17 +159,19 @@ class PassBuddy {
     this._TTL = options.TTL || 5000 // in milliseconds
     this._maxAttempts = options.maxAttempts || 5
     this._retryInterval = options.retryInterval || 500 // in milliseconds
-    this._client = _redisClient(options.host || '127.0.0.1', options.port || 6379)
+    this._client = options.redisClient instanceof redis.RedisClient
+      ? options.redisClient
+      : _redisClient(options.redisOptions)
     this._uuid = uuidv4()
     this._isHeldUntil = 0 // in milliseconds
   }
 
   /**
    * Getter for the Redis Client
-   * @return {RedisClient}
+   * @return {redis.RedisClient}
    */
   get client() {
-    return this._client()
+    return this._client instanceof redis.RedisClient ? this._client : this._client()
   }
 
   /**
