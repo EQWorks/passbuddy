@@ -1,6 +1,6 @@
 {
   "name": "@eqworks/passbuddy",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Redis implementation of a semaphore",
   "repository": "github:EQWorks/passbuddy",
   "scripts": {

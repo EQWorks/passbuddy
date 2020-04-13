@@ -7,6 +7,7 @@
 // eslint-disable-next-line max-classes-per-file
 const redis = require('redis')
 const { v4: uuidv4 } = require('uuid')
+const { promisify } = require('util')
 const onFinished = require('on-finished')
 
 
@@ -107,42 +108,35 @@ const _genLuaScript = (prefix, name, uuid, capacity, TTL) => {
 
 // instructs redis to execute the acquisition script server-side
 // return [1, expiry (in ms)] if successful, throws and error otherwise
-// eslint-disable-next-line arrow-body-style
-const _acquire = (client, prefix, name, uuid, capacity, TTL) => new Promise((resolve, reject) => {
-  client.send_command(
-    'eval',
-    [_genLuaScript(prefix, name, uuid, capacity, TTL), '0'],
-    (err, res) => {
-      if (err) {
-        reject(new PassBuddyRedisError(
-          `Redis error while attempting to acquire semaphore ${name}: ${err.message}`,
-        ))
-        return
-      }
+const _acquire = async (client, prefix, name, uuid, capacity, TTL) => {
+  try {
+    const res = await promisify(client.send_command).bind(client)(
+      'eval',
+      [_genLuaScript(prefix, name, uuid, capacity, TTL), '0'],
+    )
 
-      if (!res[0]) {
-        reject(new PassBuddyCapacityError(name))
-        return
-      }
-      resolve(res)
-    },
-  )
-})
+    if (!res[0]) {
+      throw new PassBuddyCapacityError(name)
+    }
+
+    return res
+  } catch (err) {
+    throw new PassBuddyRedisError(
+      `Redis error while attempting to acquire semaphore ${name}: ${err.message}`,
+    )
+  }
+}
 
 // sets key/value and returns redis response
-// eslint-disable-next-line arrow-body-style
-const _release = (client, prefix, name, uuid) => new Promise((resolve, reject) => {
-  client.zrem(`${prefix}-${name}`, uuid, (err, res) => {
-    if (err) {
-      reject(new PassBuddyRedisError(
-        `Redis error while attempting to release semaphore ${name}: ${err.message}`,
-      ))
-      return
-    }
-    resolve(res)
-  })
-})
-
+const _release = (client, prefix, name, uuid) => {
+  try {
+    return promisify(client.zrem).bind(client)(`${prefix}-${name}`, uuid)
+  } catch (err) {
+    throw new PassBuddyRedisError(
+      `Redis error while attempting to release semaphore ${name}: ${err.message}`,
+    )
+  }
+}
 
 class PassBuddy {
   /**
