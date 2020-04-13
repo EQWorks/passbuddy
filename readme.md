@@ -67,7 +67,7 @@ const { rows } = await pool.query('SELECT...', ...params)
 ```
 
 ## Install
-```yarn add https://github.com/EQWorks/passbuddy/```
-or ```npm install https://github.com/EQWorks/passbuddy/```
+```yarn add @eqworks/passbuddy```
+or ```npm install @eqworks/passbuddy```
 
 
