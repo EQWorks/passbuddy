@@ -72,7 +72,9 @@ const _redisClient = (host, port) => {
 }
 
 const _genLuaScript = (prefix, name, uuid, capacity, TTL) => {
-  const futureTS = Math.floor((Date.now() / 1000) + 0.5) + TTL
+  // set future TS to one hour from now in case the
+  // express server's time is behind Redis'
+  const futureTS = Math.floor((Date.now() / 1000) + 0.5) + 3600
   // script returns 1 if acquired, 0 otherwise
   return `
     -- get server timestamp
@@ -102,7 +104,7 @@ const _genLuaScript = (prefix, name, uuid, capacity, TTL) => {
   `
 }
 
-// instructs redis to execute the acquire script server-side
+// instructs redis to execute the acquisition script server-side
 // return 1 if successful, throws and error otherwise
 // eslint-disable-next-line arrow-body-style
 const _acquire = (client, prefix, name, uuid, capacity, TTL) => new Promise((resolve, reject) => {
