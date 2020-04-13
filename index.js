@@ -24,8 +24,7 @@ class PassBuddyRedisError extends Error {
   }
 }
 
-// lazily loads Redis client
-// returns a promise
+// lazy init Redis client
 const _redisClient = (host, port) => {
   let client = null
 
@@ -49,21 +48,17 @@ const _redisClient = (host, port) => {
       return Math.min(options.attempt * 100, 3000)
     }
 
-    return new Promise((resolve, reject) => {
-      const client = redis.createClient(port, host, { retry_strategy })
+    const client = redis.createClient(port, host, { retry_strategy })
 
-      client.on('error', (err) => {
-        reject(new PassBuddyRedisError(`Error with Redis client: ${err.message}`))
-      })
-
-      client.on('ready', () => {
-        resolve(client)
-      })
+    client.on('error', (err) => {
+      throw new PassBuddyRedisError(`Error with Redis client: ${err.message}`)
     })
+
+    return client
   }
 
   // init and/or returns client
-  return async () => {
+  return () => {
     if (!client) {
       client = initRedisClient(host, port)
     }
@@ -166,7 +161,7 @@ class PassBuddy {
 
   /**
    * Getter for the Redis Client
-   * @return {Promise<RedisClient>}
+   * @return {RedisClient}
    */
   get client() {
     return this._client()
@@ -180,7 +175,7 @@ class PassBuddy {
   async acquire(attempts = 0) {
     try {
       await _acquire(
-        await this.client, this._prefix, this._name,
+        this.client, this._prefix, this._name,
         this._uuid, this._capacity, this._TTL,
       )
 
@@ -206,7 +201,7 @@ class PassBuddy {
    * @return {Promise<true>}
    */
   async release() {
-    await _release(await this.client, this._prefix, this._name, this._uuid)
+    await _release(this.client, this._prefix, this._name, this._uuid)
 
     this._isHeld = false
     clearTimeout(this._timeout)
