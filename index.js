@@ -192,7 +192,9 @@ class PassBuddy {
     } catch (err) {
       // retry if capacity error
       if (attempts < this._maxAttempts && err instanceof PassBuddyCapacityError) {
-        return this.acquire()
+        return new Promise((resolve, _) => {
+          setTimeout(() => resolve(this.acquire(attempts + 1)), this._retryInterval)
+        })
       }
 
       throw err

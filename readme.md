@@ -49,7 +49,7 @@ const passOptions = {
 const pass = new PassBuddy(passOptions)
 
 // binding node-pg's pool.query method to the pass
-const query = pass.bind((...args) pool.query(...args))
+const query = pass.bind((...args) => pool.query(...args))
 // and then using it
 const { rows } = await query('SELECT...', ...params)
 
