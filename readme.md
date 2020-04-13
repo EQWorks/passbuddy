@@ -37,7 +37,7 @@ All local PassBuddy instances of the same semaphore should use the same set of o
 
 ## Example - Express Application
 ```
-const PassBuddy = require('eq-passbuddy')
+const PassBuddy = require('@eqworks/passbuddy')
 
 // instantiate PassBuddy
 const passOptions = {
