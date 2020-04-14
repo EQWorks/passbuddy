@@ -13,7 +13,7 @@ const onFinished = require('on-finished')
 
 class PassBuddyCapacityError extends Error {
   constructor(name) {
-    super(`Semaphore ${name} is at capacity`)
+    super(`Semaphore ${name} is at capacity. No permit could be acquired.`)
     this.name = 'PassBuddyCapacityError'
   }
 }
@@ -80,8 +80,8 @@ const _genLuaScript = (prefix, name, uuid, capacity, TTL) => {
   const expiry = now + TTL
 
   // script returns an array
-  // first array element is 1 if lock acquired, 0 otherwise
-  // second element is the lock expiry in milliseconds
+  // first array element is 1 if permit acquired, 0 otherwise
+  // second element is the permit expiry in milliseconds
   return `
     -- remove expired accesses
     redis.call('ZREMRANGEBYSCORE', '${key}', '-inf', ${expired})
@@ -122,25 +122,25 @@ const _acquire = async (client, prefix, name, uuid, capacity, TTL) => {
     return res
   } catch (err) {
     throw new PassBuddyRedisError(
-      `Redis error while attempting to acquire semaphore ${name}: ${err.message}`,
+      `Redis error while attempting to acquire a permit for semaphore ${name}: ${err.message}`,
     )
   }
 }
 
 // sets key/value and returns redis response
-const _release = (client, prefix, name, uuid) => {
+const _release = async (client, prefix, name, uuid) => {
   try {
-    return promisify(client.zrem).bind(client)(`${prefix}-${name}`, uuid)
+    return await promisify(client.zrem).bind(client)(`${prefix}-${name}`, uuid)
   } catch (err) {
     throw new PassBuddyRedisError(
-      `Redis error while attempting to release semaphore ${name}: ${err.message}`,
+      `Redis error while attempting to release a permit for semaphore ${name}: ${err.message}`,
     )
   }
 }
 
 class PassBuddy {
   /**
-   * Create a PassBuddy (semaphore)
+   * Create a PassBuddy (semaphore permit)
    * @param {{prefix: string, name: string, capacity: number, TTL: number,
    * maxAttempts: number, retryInterval: number, redisOptions: redis.ClientOpts,
    * redisClient: redis.RedisClient}} options - TTL and retryInterval are expressed in milliseconds
@@ -169,7 +169,7 @@ class PassBuddy {
   }
 
   /**
-   * Getter for the lock status
+   * Getter for the permit status
    * @return {boolean}
    */
   get isHeld() {
@@ -177,7 +177,7 @@ class PassBuddy {
   }
 
   /**
-   * Makes a call to the Redis remote server to acquire or extend the semaphore's validity
+   * Makes a call to the Redis remote server to acquire or extend the permit's validity
    * @param {number} [attempts=0] - Number of failed attempts before current call
    * @return {Promise<true>}
    */
@@ -203,7 +203,7 @@ class PassBuddy {
   }
 
   /**
-   * Makes a call to the Redis remote server to releaser the semaphore
+   * Makes a call to the Redis remote server to release the permit
    * @return {Promise<true>}
    */
   async release() {
@@ -214,7 +214,7 @@ class PassBuddy {
   }
 
   /**
-   * Acquires the semaphore if not already held
+   * Proceeds if a permit is held, otherwise makes a call to the remote server to acquire one
    * @return {Promise<true>}
    */
   async use() {
@@ -230,7 +230,10 @@ class PassBuddy {
     return async (...args) => {
       try {
         await this.use()
-        return callback(...args)
+
+        // let's await to make sure the callack is done with the resource
+        // before potentially releasing it in finally
+        return await callback(...args)
       } finally {
         if (releaseOnComplete) {
           this.release()
@@ -241,8 +244,8 @@ class PassBuddy {
 
   /**
    * Express middleware to:
-   * - Acquire/extend semaphore for each incoming request
-   * - Release semaphore on response/error
+   * - Acquire/extend permit for each incoming request
+   * - Release permit on response/error
    * @param {{acquireOnStart: boolean, releaseOnEnd: boolean}} options
    * @return {Function} - Express middleware
    */
